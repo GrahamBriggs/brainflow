@@ -64,7 +64,6 @@ int OpenBCISerialBoard::send_to_board (const char *msg)
     int res = serial->send_to_serial_port ((const void *)msg, length);
     if (res != length)
     {
-        
         return (int)BrainFlowExitCodes::BOARD_WRITE_ERROR;
     }
    
@@ -81,27 +80,36 @@ int OpenBCISerialBoard::send_to_board (const char *msg, std::string &response)
         response = "";
         return (int)BrainFlowExitCodes::BOARD_WRITE_ERROR;
     }
-    //  get the response
-    response = read_serial_response ();
 
+    if (is_streaming)
+    {
+        response = "No response is read when the board is streaming.";
+    }
+    else
+    {
+        response = read_serial_response (4096);
+    }
     return (int)BrainFlowExitCodes::STATUS_OK;
 }
 
-std::string OpenBCISerialBoard::read_serial_response ()
+std::string OpenBCISerialBoard::read_serial_response (int buffer_size)
 {
-    constexpr int max_tmp_size = 4096;
-    unsigned char tmp_array[max_tmp_size];
+    unsigned char tmp_array[buffer_size];
     unsigned char tmp;
     int tmp_id = 0;
     while (serial->read_from_serial_port (&tmp, 1) == 1)
     {
-        if (tmp_id < max_tmp_size)
+        if (tmp_id < buffer_size)
         {
             tmp_array[tmp_id] = tmp;
             tmp_id++;
         }
+        else
+        {
+            break;  //  exceeded number of bytes we expected to read, break out
+        }
     }
-    tmp_id = (tmp_id == max_tmp_size) ? tmp_id - 1 : tmp_id;
+    tmp_id = (tmp_id == buffer_size) ? tmp_id - 1 : tmp_id;
     tmp_array[tmp_id] = '\0';
     
     return std::string ((const char *)tmp_array);
@@ -202,7 +210,7 @@ int OpenBCISerialBoard::prepare_session ()
         return send_res;
     }
     // cyton sends response back, clean serial buffer and analyze response
-    std::string response = read_serial_response ();
+    std::string response = read_serial_response (1024);
     if (response.substr(0,7).compare("Failure") == 0)
     {
         safe_logger (spdlog::level::err,
