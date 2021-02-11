@@ -87,6 +87,7 @@ int OpenBCISerialBoard::send_to_board (const char *msg, std::string &response)
     }
     else
     {
+        safe_logger (spdlog::level::debug, "reading response from board");
         response = read_serial_response (4096);
     }
     return (int)BrainFlowExitCodes::STATUS_OK;
@@ -94,7 +95,8 @@ int OpenBCISerialBoard::send_to_board (const char *msg, std::string &response)
 
 std::string OpenBCISerialBoard::read_serial_response (int buffer_size)
 {
-    unsigned char tmp_array[buffer_size];
+    unsigned char *tmp_array  = new unsigned char[buffer_size];
+
     unsigned char tmp;
     int tmp_id = 0;
     while (serial->read_from_serial_port (&tmp, 1) == 1)
@@ -106,13 +108,16 @@ std::string OpenBCISerialBoard::read_serial_response (int buffer_size)
         }
         else
         {
+            safe_logger (spdlog::level::debug, "break out of serial port read {}", buffer_size);
             break;  //  exceeded number of bytes we expected to read, break out
         }
     }
     tmp_id = (tmp_id == buffer_size) ? tmp_id - 1 : tmp_id;
     tmp_array[tmp_id] = '\0';
-    
-    return std::string ((const char *)tmp_array);
+
+    std::string result = std::string ((const char *)tmp_array);
+    delete[] tmp_array;
+    return result;
 }
 
 int OpenBCISerialBoard::set_port_settings ()
@@ -257,12 +262,15 @@ int OpenBCISerialBoard::stop_stream ()
     {
         keep_alive = false;
         is_streaming = false;
+        safe_logger (spdlog::level::debug, "stopping streaming");
         if (streaming_thread.joinable ())
         {
             streaming_thread.join ();
         }
 
-        return send_to_board ("s");
+        int res= send_to_board ("s");
+        safe_logger (spdlog::level::debug, "streaming stopped");
+        return res;
     }
     else
     {

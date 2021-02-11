@@ -35,5 +35,5 @@ public:
     virtual int release_session ();
     virtual int config_board (std::string config, std::string &response);
 
-    virtual std::string read_serial_response (int bufferSize);
+    virtual std::string read_serial_response (int buffer_size);
 };
