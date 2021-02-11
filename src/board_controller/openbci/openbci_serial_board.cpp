@@ -3,6 +3,7 @@
 #include "openbci_serial_board.h"
 #include "serial.h"
 
+
 OpenBCISerialBoard::OpenBCISerialBoard (struct BrainFlowInputParams params, int board_id)
     : Board (board_id, params)
 {
@@ -45,16 +46,23 @@ int OpenBCISerialBoard::config_board (std::string config, std::string &response)
     {
         return (int)BrainFlowExitCodes::BOARD_NOT_READY_ERROR;
     }
+    int res = (int)BrainFlowExitCodes::STATUS_OK;
     if (is_streaming)
     {
         safe_logger (spdlog::level::warn,
             "You are changing board params during streaming, it may lead to sync mismatch between "
             "data acquisition thread and device");
+        res = send_to_board (config.c_str ());
+    }
+    else
+    {
+        // read response if streaming is not running
+        res = send_to_board (config.c_str (), response);
     }
     safe_logger (spdlog::level::warn,
         "If you change gain you may need to rescale data, in data returned by BrainFlow we use "
         "gain 24 to convert int24 to uV");
-    return send_to_board (config.c_str (), response);
+    return res;
 }
 
 int OpenBCISerialBoard::send_to_board (const char *msg)
@@ -66,7 +74,7 @@ int OpenBCISerialBoard::send_to_board (const char *msg)
     {
         return (int)BrainFlowExitCodes::BOARD_WRITE_ERROR;
     }
-   
+
     return (int)BrainFlowExitCodes::STATUS_OK;
 }
 
@@ -80,44 +88,34 @@ int OpenBCISerialBoard::send_to_board (const char *msg, std::string &response)
         response = "";
         return (int)BrainFlowExitCodes::BOARD_WRITE_ERROR;
     }
+    response = read_serial_response ();
 
-    if (is_streaming)
-    {
-        response = "No response is read when the board is streaming.";
-    }
-    else
-    {
-        safe_logger (spdlog::level::debug, "reading response from board");
-        response = read_serial_response (4096);
-    }
     return (int)BrainFlowExitCodes::STATUS_OK;
 }
 
-std::string OpenBCISerialBoard::read_serial_response (int buffer_size)
+std::string OpenBCISerialBoard::read_serial_response ()
 {
-    unsigned char *tmp_array  = new unsigned char[buffer_size];
-
+    constexpr int max_tmp_size = 4096;
+    unsigned char tmp_array[max_tmp_size];
     unsigned char tmp;
     int tmp_id = 0;
     while (serial->read_from_serial_port (&tmp, 1) == 1)
     {
-        if (tmp_id < buffer_size)
+        if (tmp_id < max_tmp_size)
         {
             tmp_array[tmp_id] = tmp;
             tmp_id++;
         }
         else
         {
-            safe_logger (spdlog::level::debug, "break out of serial port read {}", buffer_size);
-            break;  //  exceeded number of bytes we expected to read, break out
+            serial->flush_buffer ();
+            break;
         }
     }
-    tmp_id = (tmp_id == buffer_size) ? tmp_id - 1 : tmp_id;
+    tmp_id = (tmp_id == max_tmp_size) ? tmp_id - 1 : tmp_id;
     tmp_array[tmp_id] = '\0';
 
-    std::string result = std::string ((const char *)tmp_array);
-    delete[] tmp_array;
-    return result;
+    return std::string ((const char *)tmp_array);
 }
 
 int OpenBCISerialBoard::set_port_settings ()
@@ -215,12 +213,12 @@ int OpenBCISerialBoard::prepare_session ()
         return send_res;
     }
     // cyton sends response back, clean serial buffer and analyze response
-    std::string response = read_serial_response (1024);
-    if (response.substr(0,7).compare("Failure") == 0)
+    std::string response = read_serial_response ();
+    if (response.substr (0, 7).compare ("Failure") == 0)
     {
         safe_logger (spdlog::level::err,
             "Board config error, probably dongle is inserted but Cyton is off.");
-        safe_logger (spdlog::level::trace, "read {}", response.c_str());
+        safe_logger (spdlog::level::trace, "read {}", response.c_str ());
         delete serial;
         serial = NULL;
         return (int)BrainFlowExitCodes::BOARD_NOT_READY_ERROR;
@@ -262,15 +260,12 @@ int OpenBCISerialBoard::stop_stream ()
     {
         keep_alive = false;
         is_streaming = false;
-        safe_logger (spdlog::level::debug, "stopping streaming");
         if (streaming_thread.joinable ())
         {
             streaming_thread.join ();
         }
 
-        int res= send_to_board ("s");
-        safe_logger (spdlog::level::debug, "streaming stopped");
-        return res;
+        return send_to_board ("s");
     }
     else
     {
