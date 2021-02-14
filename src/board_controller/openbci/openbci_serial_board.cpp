@@ -3,6 +3,10 @@
 #include "openbci_serial_board.h"
 #include "serial.h"
 
+#include <chrono>
+#include <thread>
+
+
 
 OpenBCISerialBoard::OpenBCISerialBoard (struct BrainFlowInputParams params, int board_id)
     : Board (board_id, params)
@@ -59,16 +63,16 @@ int OpenBCISerialBoard::config_board (std::string config, std::string &response)
         // read response if streaming is not running
         res = send_to_board (config.c_str (), response);
     }
-    safe_logger (spdlog::level::warn,
-        "If you change gain you may need to rescale data, in data returned by BrainFlow we use "
-        "gain 24 to convert int24 to uV");
+//    safe_logger (spdlog::level::warn,
+//        "If you change gain you may need to rescale data, in data returned by BrainFlow we use "
+//        "gain 24 to convert int24 to uV");
     return res;
 }
 
 int OpenBCISerialBoard::send_to_board (const char *msg)
 {
     int length = (int)strlen (msg);
-    safe_logger (spdlog::level::debug, "sending {} to the board", msg);
+    safe_logger (spdlog::level::debug, "send_to_board(char) sending {} to the board", msg);
     int res = serial->send_to_serial_port ((const void *)msg, length);
     if (res != length)
     {
@@ -81,15 +85,16 @@ int OpenBCISerialBoard::send_to_board (const char *msg)
 int OpenBCISerialBoard::send_to_board (const char *msg, std::string &response)
 {
     int length = (int)strlen (msg);
-    safe_logger (spdlog::level::debug, "sending {} to the board", msg);
+    safe_logger (spdlog::level::debug, "send_to_board(char,string) sending {} to the board", msg);
     int res = serial->send_to_serial_port ((const void *)msg, length);
     if (res != length)
     {
         response = "";
         return (int)BrainFlowExitCodes::BOARD_WRITE_ERROR;
     }
+    safe_logger (spdlog::level::debug, "send_to_board reading response ...");
     response = read_serial_response ();
-
+    
     return (int)BrainFlowExitCodes::STATUS_OK;
 }
 
@@ -109,13 +114,16 @@ std::string OpenBCISerialBoard::read_serial_response ()
         else
         {
             serial->flush_buffer ();
+            safe_logger (spdlog::level::warn, "read_serial_response break");
             break;
         }
     }
     tmp_id = (tmp_id == max_tmp_size) ? tmp_id - 1 : tmp_id;
     tmp_array[tmp_id] = '\0';
 
-    return std::string ((const char *)tmp_array);
+    std::string response = std::string( ((const char *)tmp_array));
+    safe_logger (spdlog::level::debug, "read_serial_response response:{}", response);
+    return response;
 }
 
 int OpenBCISerialBoard::set_port_settings ()
@@ -127,11 +135,17 @@ int OpenBCISerialBoard::set_port_settings ()
         return (int)BrainFlowExitCodes::SET_PORT_ERROR;
     }
     safe_logger (spdlog::level::trace, "set port settings");
+   
+    //  TODO - brainflow uses "v" which will reset peripherals, tried it with "V" instead and it was less stable ?
+    //return send_to_board ("V");
+    //  this is original brainflow code
     return send_to_board ("v");
 }
 
+
 int OpenBCISerialBoard::status_check ()
 {
+    unsigned char responseBuffer[4096];
     unsigned char buf[1];
     int count = 0;
     int max_empty_seq = 5;
@@ -142,6 +156,7 @@ int OpenBCISerialBoard::status_check ()
         int res = serial->read_from_serial_port (buf, 1);
         if (res > 0)
         {
+            responseBuffer[i] = buf[0];
             num_empty_attempts = 0;
             // board is ready if there are '$$$'
             if (buf[0] == '$')
@@ -154,6 +169,7 @@ int OpenBCISerialBoard::status_check ()
             }
             if (count == 3)
             {
+                safe_logger (spdlog::level::err, "status check response:{}", std::string((const char*)responseBuffer));
                 return (int)BrainFlowExitCodes::STATUS_OK;
             }
         }
@@ -207,7 +223,10 @@ int OpenBCISerialBoard::prepare_session ()
         return initted;
     }
 
-    int send_res = send_to_board ("d");
+    //  TODO - brainflow sends d here, we have to send something because read serial response is looking for the "Failure" below
+    //  so we will try it with V (get firmware version) instead
+    // int send_res = send_to_board ("d");
+    int send_res = send_to_board ("V");   
     if (send_res != (int)BrainFlowExitCodes::STATUS_OK)
     {
         return send_res;
